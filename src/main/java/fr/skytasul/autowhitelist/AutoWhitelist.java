@@ -1,12 +1,14 @@
 package fr.skytasul.autowhitelist;
 
 import java.io.File;
-import java.io.FileReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URL;
 import java.nio.file.Files;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -16,6 +18,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 
 import net.luckperms.api.LuckPermsProvider;
+import net.luckperms.api.event.user.UserLoadEvent;
 import net.luckperms.api.model.user.User;
 import net.luckperms.api.model.user.UserManager;
 import net.luckperms.api.node.types.PermissionNode;
@@ -31,18 +34,15 @@ public class AutoWhitelist extends Plugin {
 	
 	private static final Gson GSON = new Gson();
 	
-	private File debugFile = /*new File(getDataFolder(), "untitled.csv")*/ null;
-	
 	private UserManager luckpermsUsers;
 	private Cache<String, UUID> uuidCache;
 	
 	private URL csvURL = null;
 	private int syncTime = 60;
-	private int cacheDuration;
-	private List<String> servers;
+	private List<PermissionNode> servers;
 	
 	private ScheduledTask task;
-	private Cache<String, Boolean> usernameCache;
+	private Map<String, UUID> allowedUsernames = Collections.emptyMap();
 	
 	@Override
 	public void onEnable() {
@@ -52,6 +52,8 @@ public class AutoWhitelist extends Plugin {
 		loadConfig();
 		
 		getProxy().getPluginManager().registerCommand(this, new AWManageCommand(this));
+		
+		LuckPermsProvider.get().getEventBus().subscribe(UserLoadEvent.class, this::userLoad);
 	}
 	
 	protected void loadConfig() {
@@ -72,15 +74,16 @@ public class AutoWhitelist extends Plugin {
 		try {
 			Configuration configuration = ConfigurationProvider.getProvider(YamlConfiguration.class).load(file);
 			syncTime = configuration.getInt("syncTime");
-			cacheDuration = configuration.getInt("cacheDuration");
-			servers = configuration.getStringList("servers");
+			servers = configuration.getStringList("servers")
+					.stream()
+					.map(server -> PermissionNode.builder("bungeecord.server." + server).build())
+					.toList();
 			csvURL = new URL(configuration.getString("csvURL"));
 		}catch (Exception e) {
 			getLogger().severe("An error occurred while loading configuration.");
 			e.printStackTrace();
 		}
 		
-		startCache();
 		startTask();
 	}
 	
@@ -93,25 +96,22 @@ public class AutoWhitelist extends Plugin {
 		task = getProxy().getScheduler().schedule(this, this::syncWhitelist, 1, syncTime, TimeUnit.SECONDS);
 	}
 	
-	protected void startCache() {
-		usernameCache = CacheBuilder.newBuilder().expireAfterWrite(cacheDuration, TimeUnit.SECONDS).build();
-	}
-	
 	protected void syncWhitelist() {
-		if (csvURL == null && debugFile == null) {
+		if (csvURL == null) {
 			getLogger().warning("Cannot sync whitelist: URL has not been defined.");
 			return;
 		}
 		
-		try (InputStreamReader reader = debugFile == null ? new InputStreamReader(csvURL.openStream()) : new FileReader(new File(getDataFolder(), "untitled.csv"))) {
+		try (InputStreamReader reader = new InputStreamReader(csvURL.openStream())) {
 			CsvParserSimple parser = new CsvParserSimple();
-			List<String[]> lines = parser.read(reader, 0);
+			var lines = parser.read(reader, 0);
+			var old = allowedUsernames;
+			allowedUsernames = new HashMap<>();
 			lines.stream()
 				.map(x -> x[0])
 				.filter(username -> !StringUtil.isNullOrEmpty(username))
-				.filter(username -> !usernameCache.asMap().containsKey(username))
+				.filter(username -> old.remove(username) == null)
 				.forEach(username -> {
-						usernameCache.put(username, false);
 						User user = luckpermsUsers.getUser(username);
 						if (user == null) {
 							UUID uuid = uuidCache.asMap().computeIfAbsent(username, this::getUUID);
@@ -119,24 +119,56 @@ public class AutoWhitelist extends Plugin {
 								getLogger().severe("An error occurred while retrieving UUID for player " + username);
 								return;
 							}
+							allowedUsernames.put(username, uuid);
 							luckpermsUsers.modifyUser(uuid, this::addUserPermissions);
 						}else {
-							addUserPermissions(user);
-							luckpermsUsers.saveUser(user);
+							allowedUsernames.put(username, user.getUniqueId());
+							if (addUserPermissions(user))
+								luckpermsUsers.saveUser(user);
 						}
 					});
+			
+			old.forEach((username, uuid) -> {
+				User user = luckpermsUsers.getUser(username);
+				if (user == null) {
+					luckpermsUsers.modifyUser(uuid, this::removeUserPermissions);
+				}else {
+					if (removeUserPermissions(user))
+						luckpermsUsers.saveUser(user);
+				}
+			});
 		}catch (Exception e) {
 			getLogger().severe("An error occurred while syncing whitelist.");
 			e.printStackTrace();
 		}
 	}
-
-	private void addUserPermissions(User user) {
+	
+	private void userLoad(UserLoadEvent event) {
+		User user = event.getUser();
+		String name = user.getUsername();
+		if (name == null) return; // data loading not due to player joining
+		if (!allowedUsernames.containsKey(name)) {
+			removeUserPermissions(user);
+			luckpermsUsers.saveUser(user);
+		}
+	}
+	
+	private boolean addUserPermissions(User user) {
 		boolean result = false;
-		for (String server : servers) {
-			result |= user.data().add(PermissionNode.builder("bungeecord.server." + server).build()).wasSuccessful();
+		for (PermissionNode server : servers) {
+			result |= user.data().add(server).wasSuccessful();
 		}
 		if (result) getLogger().info(user.getFriendlyName() + " has got new server permissions");
+		return result;
+	}
+	
+	private boolean removeUserPermissions(User user) {
+		boolean result = false;
+		for (PermissionNode server : servers) {
+			result |= user.data().remove(server).wasSuccessful();
+		}
+		if (result) getLogger().info(user.getFriendlyName() + " has lost its server permissions");
+		return result;
 	}
 	
 	private UUID getUUID(String name) {

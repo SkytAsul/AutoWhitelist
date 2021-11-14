@@ -1,11 +1,8 @@
 # URL to download the CSV file
-csvURL: "https://bullshiturl.com/whitelist.csv"
+csvURL: "https://randomurl.com/whitelist.csv"
 
 # Refresh time, in seconds
 syncTime: 60
-
-# Duration of entries in username cache, in seconds
-cacheDuration: 600
 
 # Servers the plugin will give join permission for
 servers:

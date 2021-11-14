@@ -11,7 +11,7 @@ import net.md_5.bungee.api.plugin.TabExecutor;
 
 public class AWManageCommand extends Command implements TabExecutor {
 	
-	private static final List<String> COMMANDS = Arrays.asList("sync", "reload", "stop", "refreshCache");
+	private static final List<String> COMMANDS = Arrays.asList("sync", "reload", "stop");
 	
 	private AutoWhitelist plugin;
 	
@@ -38,10 +38,6 @@ public class AWManageCommand extends Command implements TabExecutor {
 		case "stop":
 			plugin.stopTask();
 			sender.sendMessage("§aWhitelist syncing has been stopped. Run \"/aw reload\" to resume it.");
-			break;
-		case "refreshCache":
-			plugin.startCache();
-			sender.sendMessage("§aUsername cache has been reset. You should run \"/aw sync\" to sync again the whitelist.");
 			break;
 		default:
 			sendSyntax(sender);
