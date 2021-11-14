@@ -1,9 +1,0 @@
-name: AutoWhitelist
-version: 1.0
-author: SkytAsul
-main: fr.skytasul.autowhitelist.AutoWhitelist
-depends: [LuckPerms]
-permissions:
-  autowhitelist.manage:
-    default: false
-    description: To manage AutoWhitelist behavior
